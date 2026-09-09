@@ -1,0 +1,56 @@
+#!/system/bin/sh
+# Переключение режима очков.
+#
+#   vr-mode            — показать состояние
+#   vr-mode headset    — гарнитура: телефон не видит очки как монитор
+#   vr-mode monitor    — вернуть внешний дисплей
+#   vr-mode devices    — показать список своих очков и что воткнуто сейчас
+
+MODDIR=/data/adb/modules/vr_headset_mode
+. "$MODDIR/common.sh" 2>/dev/null || { echo "модуль не установлен"; exit 1; }
+
+case "${1:-status}" in
+    headset)
+        echo headset > "$MODEFILE"
+        hide_display
+        echo "режим: гарнитура — монитора нет, звук и микрофоны работают"
+        echo "DP: $(dp_state)"
+        log "vr-mode: переключено в headset"
+        ;;
+    monitor)
+        echo monitor > "$MODEFILE"
+        show_display
+        # Коннектор определяется не мгновенно, дадим подсистеме опомниться.
+        sleep 2
+        echo "режим: монитор — внешний дисплей возвращён"
+        echo "DP: $(dp_state)"
+        log "vr-mode: переключено в monitor"
+        ;;
+    devices)
+        echo "список своих очков ($DEVICES):"
+        grep -v '^[[:space:]]*#' "$DEVICES" 2>/dev/null | grep -v '^[[:space:]]*$' | sed 's/^/  /'
+        echo
+        echo "воткнуто сейчас:"
+        for d in /sys/bus/usb/devices/*/; do
+            [ -f "$d/idVendor" ] || continue
+            echo "  $(cat $d/idVendor):$(cat $d/idProduct)  $(cat $d/product 2>/dev/null)"
+        done
+        ;;
+    status|*)
+        echo "режим:  $(current_mode)"
+        if glasses_present; then
+            echo "очки:   $(glasses_name)"
+        else
+            echo "очки:   не найдены"
+        fi
+        echo "DP:     $(dp_state)"
+        EXT=$(dumpsys display 2>/dev/null | grep -c 'DisplayViewport{type=EXTERNAL')
+        echo "монитор в Android: $([ "$EXT" -gt 0 ] && echo "виден ($EXT)" || echo "не виден")"
+        echo "звук:   $(grep -c 'USB-Audio' /proc/asound/cards 2>/dev/null) USB-устройств"
+        if pgrep -f vrheadsetd.sh >/dev/null 2>&1; then
+            echo "демон:  работает"
+        else
+            echo "демон:  НЕ РАБОТАЕТ"
+        fi
+        ;;
+esac

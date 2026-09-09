@@ -1,0 +1,87 @@
+name: Build module
+
+on:
+  push:
+    branches: [ '**' ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Проверить синтаксис скриптов
+        run: |
+          set -eu
+          for f in module/*.sh module/vr-mode; do
+            sh -n "$f" || { echo "::error file=$f::синтаксическая ошибка"; exit 1; }
+            echo "ok: $f"
+          done
+
+      - name: Собрать zip
+        id: zip
+        run: |
+          set -eu
+          STAGE=build/module
+          mkdir -p "$STAGE"
+          cp module/* "$STAGE"/
+          chmod 755 "$STAGE"/*.sh "$STAGE/vr-mode"
+
+          TAG="${GITHUB_REF_NAME}"
+          case "$GITHUB_REF" in
+            refs/tags/*)
+              VC=$(echo "$TAG" | tr -dc '0-9')
+              sed -i "s/^version=.*/version=$TAG/" "$STAGE/module.prop"
+              sed -i "s/^versionCode=.*/versionCode=${VC:-1}/" "$STAGE/module.prop"
+              ;;
+          esac
+
+          NAME="vr-headset-mode-${TAG}.zip"
+          (cd "$STAGE" && zip -r "../../$NAME" . -x '.*')
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          unzip -l "$NAME"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: module-${{ github.sha }}
+          path: ${{ steps.zip.outputs.name }}
+          retention-days: 30
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: VR Headset Mode ${{ github.ref_name }}
+          generate_release_notes: true
+          files: ${{ steps.zip.outputs.name }}
+
+      - name: Обновить update.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -eu
+          TAG="${GITHUB_REF_NAME}"
+          VC=$(echo "$TAG" | tr -dc '0-9')
+          cat > update.json <<JSON
+          {
+            "version": "$TAG",
+            "versionCode": ${VC:-1},
+            "zipUrl": "https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/vr-headset-mode-$TAG.zip",
+            "changelog": "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/CHANGELOG.md"
+          }
+          JSON
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          git add update.json
+          git diff --cached --quiet || git commit -m "Point update.json at $TAG"
+          git push origin main

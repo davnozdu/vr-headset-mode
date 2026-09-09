@@ -1,0 +1,7 @@
+id=vr_headset_mode
+name=VR Headset Mode
+version=v1.0
+versionCode=1
+author=davnozdu
+description=Превращает VR-очки в обычную гарнитуру: телефон перестаёт видеть их как монитор, но звук, микрофоны и камера остаются. Список очков задаётся по USB VID:PID и правится без пересборки.
+updateJson=https://raw.githubusercontent.com/davnozdu/vr-headset-mode/main/update.json
