@@ -25,6 +25,34 @@ jobs:
             echo "ok: $f"
           done
 
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install build-tools
+        run: sdkmanager --install "build-tools;35.0.0"
+
+      - name: Забрать последний APK VR Companion
+        run: |
+          set -eu
+          mkdir -p build
+          URL=$(curl -fsSL https://api.github.com/repos/davnozdu/vr-companion/releases/latest \
+                | grep -o '"browser_download_url": *"[^"]*\.apk"' \
+                | head -1 | cut -d'"' -f4)
+          if [ -z "$URL" ]; then
+            echo "::error::не нашёл APK в релизах vr-companion"
+            exit 1
+          fi
+          echo "APK: $URL"
+          curl -fsSL -o build/vr-companion.apk "$URL"
+          BT="$ANDROID_HOME/build-tools/35.0.0"
+          VC=$("$BT/aapt2" dump badging build/vr-companion.apk \
+               | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" | head -1)
+          VN=$("$BT/aapt2" dump badging build/vr-companion.apk \
+               | sed -n "s/.*versionName='\([^']*\)'.*/\1/p" | head -1)
+          test -n "$VC"
+          echo "$VC" > build/apk-versioncode
+          echo "VR Companion $VN (versionCode $VC)"
+
       - name: Собрать zip
         id: zip
         run: |
@@ -32,6 +60,8 @@ jobs:
           STAGE=build/module
           mkdir -p "$STAGE"
           cp module/* "$STAGE"/
+          cp build/vr-companion.apk "$STAGE/vr-companion.apk"
+          cp build/apk-versioncode "$STAGE/apk-versioncode"
           chmod 755 "$STAGE"/*.sh "$STAGE/vr-mode"
 
           TAG="${GITHUB_REF_NAME}"
