@@ -86,9 +86,18 @@ hide_display() {
 }
 
 # Вернуть монитор.
+#
+# Сначала detect — он возвращает штатное автоопределение. Но после
+# принудительного off физический линк разорван, и переопрос ничего не
+# находит: коннектор так и остаётся disconnected. Тогда форсируем on —
+# ядро проводит модсет заново, и дисплей оживает.
 show_display() {
     for f in $(dp_nodes); do
         echo detect > "$f" 2>/dev/null
+    done
+    sleep 1
+    for f in $(dp_nodes); do
+        [ "$(cat "$f" 2>/dev/null)" = "connected" ] || echo on > "$f" 2>/dev/null
     done
 }
 
