@@ -25,6 +25,13 @@ if [ ! -f "$DEVICES" ]; then
     log "создан список устройств: $DEVICES"
 fi
 
+# Настройки задержек — тоже только при первом запуске: правки пользователя
+# обновление модуля затирать не должно.
+if [ ! -f "$SETTINGS" ]; then
+    cp "$MODDIR/settings.conf.default" "$SETTINGS"
+    log "создан файл настроек: $SETTINGS"
+fi
+
 # Режим по умолчанию задаём явно, чтобы vr-display-module, если он стоит,
 # видел то же самое значение, а не догадывался.
 [ -f "$MODEFILE" ] || echo headset > "$MODEFILE"

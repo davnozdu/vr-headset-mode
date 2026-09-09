@@ -22,6 +22,7 @@ echo $$ > "$PIDFILE"
 log "демон: старт"
 prev_present=""
 prev_mode=""
+ready=no          # очки этой сессии уже проснулись и их можно гасить
 
 while true; do
     mode=$(current_mode)
@@ -33,20 +34,33 @@ while true; do
             log "очки подключены: $(glasses_name)"
         else
             log "очки отключены"
+            # Следующее подключение — новая сессия, будить придётся заново.
+            ready=no
         fi
     fi
     [ "$mode" != "$prev_mode" ] && [ -n "$prev_mode" ] && log "режим переключён: $mode"
 
     if [ "$present" = yes ] && [ "$mode" = headset ]; then
-        # Применяем на каждой итерации, а не только на изменении: коннектор
-        # возвращается в connected сам после переподключения кабеля, выхода
-        # из сна и перезапуска дисплейной подсистемы.
-        for f in $(dp_nodes); do
-            if [ "$(cat "$f" 2>/dev/null)" = "connected" ]; then
-                echo off > "$f" 2>/dev/null
-                log "дисплей скрыт ($(basename "$(dirname "$f")"))"
+        if [ "$ready" = no ]; then
+            # Очкам нужен хотя бы один успешный DisplayPort-линк, чтобы
+            # включить свой аудиоусилитель. Если погасить коннектор раньше,
+            # система видит гарнитуру и отдаёт ей звук, а из динамиков
+            # ничего не идёт. Поэтому ждём готовности, а не гасим сразу.
+            if wait_ready; then
+                log "очки проснулись, скрываю дисплей"
+                hide_display
+                ready=yes
             fi
-        done
+        else
+            # Коннектор возвращается в connected сам: после выхода из сна
+            # и перезапуска дисплейной подсистемы. Возвращаем своё.
+            for f in $(dp_nodes); do
+                if [ "$(cat "$f" 2>/dev/null)" = "connected" ]; then
+                    echo off > "$f" 2>/dev/null
+                    log "дисплей скрыт повторно ($(basename "$(dirname "$f")"))"
+                fi
+            done
+        fi
     fi
 
     prev_present=$present

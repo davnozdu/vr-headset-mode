@@ -6,6 +6,11 @@ CFGDIR=/data/adb/vr_headset
 LOG=$CFGDIR/log
 DEVICES=$CFGDIR/devices.conf
 MODEFILE=/data/adb/vr_mode      # общий с VR Display Mode: monitor | headset
+SETTINGS=$CFGDIR/settings.conf
+
+# Настройки задержек. Файл необязателен: без него берутся значения по
+# умолчанию, заданные ниже по месту использования.
+[ -f "$SETTINGS" ] && . "$SETTINGS"
 
 log() {
     mkdir -p "$CFGDIR" 2>/dev/null
@@ -73,6 +78,46 @@ glasses_name() {
             fi
         done < "$DEVICES"
     done
+}
+
+
+# Звуковая карта очков поднялась?
+audio_ready() {
+    grep -q 'USB-Audio' /proc/asound/cards 2>/dev/null
+}
+
+# Хотя бы один DP-коннектор отрапортовал connected?
+dp_up() {
+    for f in $(dp_nodes); do
+        [ "$(cat "$f" 2>/dev/null)" = "connected" ] && return 0
+    done
+    return 1
+}
+
+# Ждём, пока очки полностью проснутся.
+#
+# Их аудиоусилитель включается только после успешного DisplayPort-линка.
+# Если погасить коннектор раньше, система видит гарнитуру и отдаёт ей
+# звук, а из динамиков ничего не идёт — проверено на живом устройстве.
+#
+# Поэтому дожидаемся и линка, и появления звуковой карты, а сверх того
+# выдерживаем паузу: карта регистрируется раньше, чем усилитель выходит
+# на режим.
+wait_ready() {
+    W=${READY_TIMEOUT:-20}
+    i=0
+    while [ $i -lt "$W" ]; do
+        if dp_up && audio_ready; then
+            sleep "${READY_GRACE:-5}"
+            return 0
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+    # Не дождались: гасить нельзя, иначе останемся без звука. Пусть лучше
+    # дисплей повисит — это заметно и поправимо, а немая гарнитура нет.
+    log "очки не проснулись за ${W}с — дисплей не трогаю"
+    return 1
 }
 
 # Спрятать очки как монитор. Звук, микрофоны и камера при этом остаются:
