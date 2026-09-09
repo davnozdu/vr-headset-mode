@@ -9,7 +9,11 @@ MODEFILE=/data/adb/vr_mode      # общий с VR Display Mode: monitor | heads
 
 log() {
     mkdir -p "$CFGDIR" 2>/dev/null
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"
+    # На раннем этапе загрузки date иногда возвращает пустоту, и запись
+    # уходила в лог без отметки времени. Подстраховываемся аптаймом.
+    TS=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)
+    [ -z "$TS" ] && TS="uptime $(cut -d' ' -f1 /proc/uptime 2>/dev/null)"
+    echo "$TS $*" >> "$LOG"
     # Телефон работает месяцами без перезагрузки — лог не должен расти вечно.
     if [ "$(wc -c < "$LOG" 2>/dev/null || echo 0)" -gt 262144 ]; then
         tail -c 131072 "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
