@@ -42,42 +42,64 @@ current_mode() {
     esac
 }
 
+# Идентификаторы своих очков из devices.conf, по одному в строке.
+#
+# Берём первое слово строки, а не всю строку без пробелов: имя устройства
+# может стоять и рядом с идентификатором — именно так его писал
+# VR Companion, — а склеенное "3318:0436xrealonepro" не совпадало с
+# vid:pid никогда, и режим гарнитуры молча умирал после первого же
+# сохранения списка из приложения.
+#
+# Разбор идёт одним проходом sed, а не построчным циклом в шелле: раньше
+# на каждую строку файла уходила четвёрка процессов echo/sed/tr/tr.
+device_ids() {
+    [ -f "$DEVICES" ] || return 0
+    sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]].*//' -e '/^$/d' "$DEVICES" \
+        | tr -d '\r' | tr 'A-Z' 'a-z'
+}
+
+# Пара vid:pid для USB-узла sysfs.
+usb_id() {
+    echo "$(cat "$1/idVendor" 2>/dev/null):$(cat "$1/idProduct" 2>/dev/null)"
+}
+
 # Очки на шине?
 #
 # Опознаём по USB, а не по DisplayPort: в режиме гарнитуры DP-коннектор мы
 # сами гасим, и он рапортует disconnected — сенсор на его основе ослеп бы
 # сразу после первого же срабатывания.
+#
+# Список читается один раз на вызов. Раньше файл перечитывался целиком для
+# каждого узла шины: замер на OnePlus 15 дал 378 мс на вызов против 94 мс
+# теперь, а вызов идёт раз в POLL_INTERVAL, то есть каждые две секунды.
 glasses_present() {
-    [ -f "$DEVICES" ] || return 1
+    ids=$(device_ids)
+    [ -n "$ids" ] || return 1
     for d in /sys/bus/usb/devices/*/; do
         [ -f "$d/idVendor" ] || continue
-        vid=$(cat "$d/idVendor" 2>/dev/null)
-        pid=$(cat "$d/idProduct" 2>/dev/null)
-        # Пустые строки и комментарии пропускаем, регистр не важен.
-        while IFS= read -r line; do
-            line=$(echo "$line" | sed 's/#.*//' | tr -d ' \t\r' | tr 'A-Z' 'a-z')
-            [ -z "$line" ] && continue
-            [ "$line" = "$vid:$pid" ] && return 0
-        done < "$DEVICES"
+        cur=$(usb_id "$d")
+        for id in $ids; do
+            [ "$id" = "$cur" ] && return 0
+        done
     done
     return 1
 }
 
 # Имя найденных очков — только для лога.
 glasses_name() {
+    ids=$(device_ids)
+    [ -n "$ids" ] || return 1
     for d in /sys/bus/usb/devices/*/; do
         [ -f "$d/idVendor" ] || continue
-        vid=$(cat "$d/idVendor" 2>/dev/null)
-        pid=$(cat "$d/idProduct" 2>/dev/null)
-        while IFS= read -r line; do
-            line=$(echo "$line" | sed 's/#.*//' | tr -d ' \t\r' | tr 'A-Z' 'a-z')
-            [ -z "$line" ] && continue
-            if [ "$line" = "$vid:$pid" ]; then
-                echo "$(cat "$d/product" 2>/dev/null || echo "$vid:$pid") ($vid:$pid)"
+        cur=$(usb_id "$d")
+        for id in $ids; do
+            if [ "$id" = "$cur" ]; then
+                echo "$(cat "$d/product" 2>/dev/null || echo "$cur") ($cur)"
                 return 0
             fi
-        done < "$DEVICES"
+        done
     done
+    return 1
 }
 
 
