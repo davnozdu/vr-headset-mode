@@ -52,7 +52,16 @@ jobs:
             exit 1
           fi
           echo "APK: $URL"
-          curl -fsSL -o build/vr-companion.apk "$URL"
+          # Отдача релизов периодически отвечает 504, и сборка падала на
+          # ровном месте. Пробуем несколько раз, прежде чем сдаваться.
+          ok=
+          for try in 1 2 3 4 5; do
+            if curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+                    -o build/vr-companion.apk "$URL"; then ok=1; break; fi
+            echo "попытка $try не удалась, ждём"
+            sleep 10
+          done
+          [ -n "$ok" ] || { echo "::error::не скачать APK после пяти попыток"; exit 1; }
           BT="$ANDROID_HOME/build-tools/35.0.0"
           VC=$("$BT/aapt2" dump badging build/vr-companion.apk \
                | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" | head -1)
