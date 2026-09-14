@@ -214,6 +214,31 @@ static int cam_frame(struct cam *c, struct v4l2_buffer *bf) {
     return -1;
 }
 
+/**
+ * Разобрать типы NAL-единиц в кадре Annex-B.
+ *
+ * Нужно ровно две вещи: несёт ли кадр наборы параметров (VPS/SPS/PPS) и
+ * опорный ли он. Камера отдаёт заголовки не в начале потока, а вместе с
+ * каждым опорным кадром, поэтому запись обязана начинаться именно с
+ * такого — иначе первые кадры ссылаются на параметры, которых в файле нет,
+ * и декодер спотыкается на «PPS id out of range».
+ */
+static void scan_nals(const unsigned char *p, unsigned int len,
+                      int *has_params, int *is_key) {
+    *has_params = 0;
+    *is_key = 0;
+    for (unsigned int i = 0; i + 4 < len; ) {
+        int sl;
+        if (p[i] == 0 && p[i+1] == 0 && p[i+2] == 0 && p[i+3] == 1) sl = 4;
+        else if (p[i] == 0 && p[i+1] == 0 && p[i+2] == 1) sl = 3;
+        else { i++; continue; }
+        int type = (p[i + sl] >> 1) & 0x3F;
+        if (type == 32) *has_params = 1;          // VPS
+        if (type >= 16 && type <= 21) *is_key = 1; // IDR/CRA и соседи
+        i += sl;
+    }
+}
+
 /** Пропустить n содержательных кадров: настройки вступают в силу не сразу. */
 static int cam_warmup(struct cam *c, int n) {
     int seen = 0;
@@ -288,7 +313,7 @@ static int shoot_video(const char *dev, const char *out, int seconds) {
     time_t t0 = time(NULL);
     unsigned long total = 0;
     long long first_us = 0;
-    int frames = 0, stalls = 0;
+    int frames = 0, stalls = 0, started = 0;
     while (time(NULL) - t0 < seconds) {
         struct v4l2_buffer bf;
         if (cam_frame(&c, &bf) != 0) {
@@ -299,12 +324,23 @@ static int shoot_video(const char *dev, const char *out, int seconds) {
         }
         stalls = 0;
         if (bf.bytesused > MIN_FRAME_BYTES) {
-            long long us = (long long)bf.timestamp.tv_sec * 1000000 + bf.timestamp.tv_usec;
-            if (frames == 0) first_us = us;
-            fprintf(idx, "%lu %u %lld\n", total, bf.bytesused, us);
-            fwrite(c.bufs[bf.index], 1, bf.bytesused, f);
-            total += bf.bytesused;
-            frames++;
+            const unsigned char *data = c.bufs[bf.index];
+            int has_params, is_key;
+            scan_nals(data, bf.bytesused, &has_params, &is_key);
+
+            // Первым в файл обязан лечь кадр с наборами параметров: камера
+            // включается посреди группы, и без заголовков начало потока
+            // декодировать нечем. Ждём опорный — это до полусекунды.
+            if (!started && has_params) started = 1;
+
+            if (started) {
+                long long us = (long long)bf.timestamp.tv_sec * 1000000 + bf.timestamp.tv_usec;
+                if (frames == 0) first_us = us;
+                fprintf(idx, "%lu %u %lld %d\n", total, bf.bytesused, us, is_key ? 1 : 0);
+                fwrite(data, 1, bf.bytesused, f);
+                total += bf.bytesused;
+                frames++;
+            }
         }
         ioctl(c.fd, VIDIOC_QBUF, &bf);
     }
