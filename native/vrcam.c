@@ -50,6 +50,11 @@ static const unsigned char ACTIVATE[] = {
 // Кадры меньше этого — служебные пустышки, они приходят и в норме.
 #define MIN_FRAME_BYTES 2000
 
+// Потолок для записи без заданной длительности. Нужен на случай, если
+// вызывающий умер и файл-стоп никто не создаст: камера не должна остаться
+// включённой насовсем.
+#define VIDEO_MAX_SECONDS 3600
+
 static void die(const char *msg) {
     fprintf(stderr, "vrcam: %s\n", msg);
     exit(1);
@@ -296,6 +301,22 @@ static int shoot_photo(const char *dev, const char *out) {
  * картинкой по общим часам, а не встык. Без этого звук уезжал бы вперёд на
  * время прогрева автоэкспозиции.
  */
+/**
+ * Запись идёт, пока не появится файл-стоп рядом с выходным.
+ *
+ * Останавливать сигналом было бы неудобно вызывающему: приложение держит
+ * единственный root-шелл занятым на всё время съёмки и вторую команду
+ * послать не может. Файл же оно создаёт само, без root и без шелла.
+ */
+static int stop_requested(const char *out) {
+    char p[512];
+    snprintf(p, sizeof p, "%s.stop", out);
+    return access(p, F_OK) == 0;
+}
+
+/**
+ * @param seconds сколько писать; 0 или меньше — до файла-стопа.
+ */
 static int shoot_video(const char *dev, const char *out, int seconds) {
     struct cam c;
     int rc = cam_start(&c, dev, v4l2_fourcc('H', 'E', 'V', 'C'));
@@ -314,7 +335,12 @@ static int shoot_video(const char *dev, const char *out, int seconds) {
     unsigned long total = 0;
     long long first_us = 0;
     int frames = 0, stalls = 0, started = 0;
-    while (time(NULL) - t0 < seconds) {
+    // Без заданной длительности пишем до остановки, но не вечно: зависший
+    // вызывающий не должен оставить камеру включённой на всю ночь.
+    int limit = seconds > 0 ? seconds : VIDEO_MAX_SECONDS;
+    int wait_stop = seconds <= 0;
+    while (time(NULL) - t0 < limit) {
+        if (wait_stop && stop_requested(out)) break;
         struct v4l2_buffer bf;
         if (cam_frame(&c, &bf) != 0) {
             // Одиночный таймаут — не повод бросать запись: поток мог
@@ -346,6 +372,13 @@ static int shoot_video(const char *dev, const char *out, int seconds) {
     }
     fclose(idx);
     fclose(f);
+    // Убираем за собой: оставленный файл-стоп оборвал бы следующую запись
+    // в первую же секунду.
+    {
+        char sp[512];
+        snprintf(sp, sizeof sp, "%s.stop", out);
+        unlink(sp);
+    }
     int secs = (int)(time(NULL) - t0);
     cam_stop(&c);
     if (frames == 0) return -1;
@@ -359,7 +392,7 @@ static void usage(void) {
     printf("использование:\n"
            "  vrcam status\n"
            "  vrcam photo <файл>\n"
-           "  vrcam video <файл> <секунд>\n");
+           "  vrcam video <файл> [секунд]   без секунд — до файла <файл>.stop\n");
 }
 
 int main(int argc, char **argv) {
@@ -392,9 +425,9 @@ int main(int argc, char **argv) {
         if (rc != 0) die("снять кадр не удалось");
         return 0;
     }
-    if (!strcmp(argv[1], "video") && argc > 3) {
-        int secs = atoi(argv[3]);
-        if (secs < 1) secs = 1;
+    if (!strcmp(argv[1], "video") && argc > 2) {
+        // Без длительности пишем до появления файла-стопа.
+        int secs = argc > 3 ? atoi(argv[3]) : 0;
         int rc = shoot_video(dev, argv[2], secs);
         if (rc == -2) die("поток не взведён — переподключите очки");
         if (rc == -3) die("режим HEVC не встал");
