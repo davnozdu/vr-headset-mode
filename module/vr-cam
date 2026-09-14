@@ -1,0 +1,78 @@
+#!/system/bin/sh
+# Съёмка с камеры очков.
+#
+#   vr-cam status            — есть ли камера и готова ли она
+#   vr-cam photo <файл>      — снимок JPEG 1920x1080
+#   vr-cam video <файл> <с>  — поток HEVC и рядом <файл>.idx с индексом кадров
+#
+# Контейнер здесь не собирается: приложение упакует поток в MP4 вместе со
+# звуком, который пишет само. Путь задаёт вызывающий — модуль ничего не
+# знает о чужих каталогах и никуда не пишет по своему усмотрению.
+
+MODDIR=/data/adb/modules/vr_headset_mode
+. "$MODDIR/common.sh" 2>/dev/null || { echo "модуль не установлен"; exit 1; }
+
+BIN=$MODDIR/vrcam
+LOCK=$CFGDIR/cam.lock
+
+[ -x "$BIN" ] || { echo "нет $BIN"; exit 1; }
+
+# Камера отдаёт один поток за раз, и две одновременные съёмки не просто
+# мешают друг другу — сессия, не получившая кадров, роняет поток в EIO,
+# после чего помогает только физический перетык очков. Поэтому вход строго
+# по одному.
+mkdir -p "$CFGDIR" 2>/dev/null
+if ! mkdir "$LOCK" 2>/dev/null; then
+    # Замок мог остаться от процесса, которого уже нет.
+    OWNER=$(cat "$LOCK/pid" 2>/dev/null)
+    if [ -n "$OWNER" ] && [ -d "/proc/$OWNER" ]; then
+        echo "съёмка уже идёт (pid $OWNER)"
+        exit 4
+    fi
+    log "vr-cam: снят осиротевший замок (pid ${OWNER:-неизвестен})"
+    rm -rf "$LOCK"
+    mkdir "$LOCK" 2>/dev/null || { echo "не взять замок"; exit 4; }
+fi
+echo $$ > "$LOCK/pid"
+trap 'rm -rf "$LOCK"' EXIT INT TERM
+
+case "${1:-}" in
+    status)
+        if OUT=$("$BIN" status 2>&1); then
+            echo "камера: $OUT"
+        else
+            echo "камера: $OUT"
+            exit 3
+        fi
+        ;;
+    photo)
+        [ -n "${2:-}" ] || { echo "укажите файл"; exit 2; }
+        if OUT=$("$BIN" photo "$2" 2>&1); then
+            log "vr-cam: фото $OUT"
+            echo "$OUT"
+        else
+            log "vr-cam: фото не снято — $OUT"
+            echo "$OUT"
+            exit 3
+        fi
+        ;;
+    video)
+        [ -n "${2:-}" ] || { echo "укажите файл"; exit 2; }
+        [ -n "${3:-}" ] || { echo "укажите длительность в секундах"; exit 2; }
+        if OUT=$("$BIN" video "$2" "$3" 2>&1); then
+            log "vr-cam: видео $OUT"
+            echo "$OUT"
+        else
+            log "vr-cam: видео не снято — $OUT"
+            echo "$OUT"
+            exit 3
+        fi
+        ;;
+    *)
+        echo "использование:"
+        echo "  vr-cam status"
+        echo "  vr-cam photo <файл>"
+        echo "  vr-cam video <файл> <секунд>"
+        exit 2
+        ;;
+esac

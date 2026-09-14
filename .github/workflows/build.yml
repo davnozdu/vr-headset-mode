@@ -20,13 +20,22 @@ jobs:
       - name: Проверить синтаксис скриптов
         run: |
           set -eu
-          for f in module/*.sh module/vr-mode; do
+          for f in module/*.sh module/vr-mode module/vr-cam; do
             sh -n "$f" || { echo "::error file=$f::синтаксическая ошибка"; exit 1; }
             echo "ok: $f"
           done
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+
+      - name: Собрать vrcam под ARM64
+        run: |
+          set -eu
+          mkdir -p build
+          NDK="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang"
+          "$CC" -O2 -Wall -Wextra -static-libgcc -o build/vrcam native/vrcam.c
+          file build/vrcam
 
       - name: Install build-tools
         run: sdkmanager --install "build-tools;35.0.0"
@@ -62,7 +71,8 @@ jobs:
           cp module/* "$STAGE"/
           cp build/vr-companion.apk "$STAGE/vr-companion.apk"
           cp build/apk-versioncode "$STAGE/apk-versioncode"
-          chmod 755 "$STAGE"/*.sh "$STAGE/vr-mode"
+          cp build/vrcam "$STAGE/vrcam"
+          chmod 755 "$STAGE"/*.sh "$STAGE/vr-mode" "$STAGE/vr-cam" "$STAGE/vrcam"
 
           TAG="${GITHUB_REF_NAME}"
           case "$GITHUB_REF" in

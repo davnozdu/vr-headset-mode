@@ -42,6 +42,8 @@ log "режим: $(current_mode)"
 mkdir -p /data/adb/bin
 cp "$MODDIR/vr-mode" /data/adb/bin/vr-mode 2>/dev/null
 chmod 755 /data/adb/bin/vr-mode 2>/dev/null
+cp "$MODDIR/vr-cam" /data/adb/bin/vr-cam 2>/dev/null
+chmod 755 /data/adb/bin/vr-cam 2>/dev/null
 
 nohup sh "$MODDIR/vrheadsetd.sh" >/dev/null 2>&1 &
 sleep 2

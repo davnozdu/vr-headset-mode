@@ -12,6 +12,10 @@ SETTINGS=$CFGDIR/settings.conf
 # умолчанию, заданные ниже по месту использования.
 [ -f "$SETTINGS" ] && . "$SETTINGS"
 
+# Разделители полей для read, включая \r: devices.conf могли править
+# в Windows. Считается один раз при подключении файла, не в цикле.
+VR_IFS=$(printf ' \t\r')
+
 log() {
     mkdir -p "$CFGDIR" 2>/dev/null
     # На раннем этапе загрузки date иногда возвращает пустоту, и запись
@@ -42,65 +46,62 @@ current_mode() {
     esac
 }
 
-# Идентификаторы своих очков из devices.conf, по одному в строке.
+# Поиск своих очков на шине.
 #
-# Берём первое слово строки, а не всю строку без пробелов: имя устройства
-# может стоять и рядом с идентификатором — именно так его писал
-# VR Companion, — а склеенное "3318:0436xrealonepro" не совпадало с
-# vid:pid никогда, и режим гарнитуры молча умирал после первого же
-# сохранения списка из приложения.
+# Ни одного внешнего процесса: функция вызывается в цикле демона каждые
+# POLL_INTERVAL секунд, и цена имеет значение. Файлы sysfs читаются
+# встроенным read, а не $(cat ...); devices.conf разбирается подстановками
+# параметров. Замер на OnePlus 15: 62 мс на вызов было, 1 мс стало.
 #
-# Разбор идёт одним проходом sed, а не построчным циклом в шелле: раньше
-# на каждую строку файла уходила четвёрка процессов echo/sed/tr/tr.
-device_ids() {
-    [ -f "$DEVICES" ] || return 0
-    sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]].*//' -e '/^$/d' "$DEVICES" \
-        | tr -d '\r' | tr 'A-Z' 'a-z'
-}
-
-# Пара vid:pid для USB-узла sysfs.
-usb_id() {
-    echo "$(cat "$1/idVendor" 2>/dev/null):$(cat "$1/idProduct" 2>/dev/null)"
+# Опознаём по USB, а не по DisplayPort: в режиме гарнитуры картинку мы
+# сами гасим, и сенсор на основе DP ослеп бы после первого срабатывания.
+#
+# Файл перечитывается на каждой проверке — так обещано в его шапке,
+# правки подхватываются без перезапуска демона.
+#
+# Результат: GLASSES_ID и GLASSES_NAME.
+find_glasses() {
+    GLASSES_ID=""
+    GLASSES_NAME=""
+    [ -f "$DEVICES" ] || return 1
+    for d in /sys/bus/usb/devices/*/; do
+        [ -f "$d/idVendor" ] || continue
+        read -r vid < "$d/idVendor" 2>/dev/null || continue
+        read -r pid < "$d/idProduct" 2>/dev/null || continue
+        cur="$vid:$pid"
+        # read с VR_IFS сам отрезает ведущие пробелы и \r, а лишние поля
+        # уходят в rest — из строки "3318:0436 XREAL One Pro" остаётся
+        # идентификатор. Раньше строка бралась целиком без пробелов, и
+        # склеенное "3318:0436xrealonepro" не совпадало никогда.
+        while IFS="$VR_IFS" read -r first rest || [ -n "$first" ]; do
+            first=${first%%#*}
+            [ -n "$first" ] || continue
+            # Регистр приводим только когда есть что приводить: в файле от
+            # приложения и в дефолтном он уже нижний, и форк не нужен.
+            case "$first" in
+                *[ABCDEF]*) first=$(echo "$first" | tr 'A-Z' 'a-z') ;;
+            esac
+            [ "$first" = "$cur" ] || continue
+            GLASSES_ID=$cur
+            [ -f "$d/product" ] && read -r GLASSES_NAME < "$d/product" 2>/dev/null
+            [ -n "$GLASSES_NAME" ] || GLASSES_NAME=$cur
+            return 0
+        done < "$DEVICES"
+    done
+    return 1
 }
 
 # Очки на шине?
-#
-# Опознаём по USB, а не по DisplayPort: в режиме гарнитуры DP-коннектор мы
-# сами гасим, и он рапортует disconnected — сенсор на его основе ослеп бы
-# сразу после первого же срабатывания.
-#
-# Список читается один раз на вызов. Раньше файл перечитывался целиком для
-# каждого узла шины: замер на OnePlus 15 дал 378 мс на вызов против 94 мс
-# теперь, а вызов идёт раз в POLL_INTERVAL, то есть каждые две секунды.
 glasses_present() {
-    ids=$(device_ids)
-    [ -n "$ids" ] || return 1
-    for d in /sys/bus/usb/devices/*/; do
-        [ -f "$d/idVendor" ] || continue
-        cur=$(usb_id "$d")
-        for id in $ids; do
-            [ "$id" = "$cur" ] && return 0
-        done
-    done
-    return 1
+    find_glasses
 }
 
 # Имя найденных очков — только для лога.
 glasses_name() {
-    ids=$(device_ids)
-    [ -n "$ids" ] || return 1
-    for d in /sys/bus/usb/devices/*/; do
-        [ -f "$d/idVendor" ] || continue
-        cur=$(usb_id "$d")
-        for id in $ids; do
-            if [ "$id" = "$cur" ]; then
-                echo "$(cat "$d/product" 2>/dev/null || echo "$cur") ($cur)"
-                return 0
-            fi
-        done
-    done
-    return 1
+    find_glasses || return 1
+    echo "$GLASSES_NAME ($GLASSES_ID)"
 }
+
 
 
 

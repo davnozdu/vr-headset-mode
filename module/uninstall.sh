@@ -23,6 +23,6 @@ done
 
 PIDFILE=/data/adb/vr_headset/daemon.pid
 [ -f "$PIDFILE" ] && kill -9 "$(cat "$PIDFILE")" 2>/dev/null
-rm -f "$PIDFILE" /data/adb/bin/vr-mode
+rm -f "$PIDFILE" /data/adb/bin/vr-mode /data/adb/bin/vr-cam
 
 # Список устройств и лог оставляем: при переустановке настройки сохранятся.
